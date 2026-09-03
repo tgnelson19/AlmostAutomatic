@@ -36,3 +36,4 @@ C:\Users\Tyler\source\AlmostAutomatic\FpsRange\obj\Debug\net9.0\FpsRange.pdb
 C:\Users\Tyler\source\AlmostAutomatic\FpsRange\obj\Debug\net9.0\FpsRange.genruntimeconfig.cache
 C:\Users\Tyler\source\AlmostAutomatic\FpsRange\obj\Debug\net9.0\ref\FpsRange.dll
 C:\Users\Tyler\source\AlmostAutomatic\FpsRange\bin\Debug\net9.0\LiteNetLib.dll
+C:\Users\Tyler\source\AlmostAutomatic\fpsrange\obj\Debug\net9.0\FpsRange.sourcelink.json

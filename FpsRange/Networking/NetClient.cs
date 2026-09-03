@@ -53,15 +53,10 @@ public class NetClient : INetEventListener
 
     public void OnPeerDisconnected(NetPeer peer, DisconnectInfo disconnectInfo)
     {
-        if (State != ClientConnectionState.Connected)
-        {
-            State = ClientConnectionState.Failed;
-            FailReason = disconnectInfo.Reason.ToString();
-        }
-        else
-        {
-            State = ClientConnectionState.Disconnected;
-        }
+        FailReason = disconnectInfo.Reason.ToString();
+        State = State == ClientConnectionState.Connected
+            ? ClientConnectionState.Disconnected
+            : ClientConnectionState.Failed;
     }
 
     public void OnNetworkError(IPEndPoint endPoint, SocketError socketError)

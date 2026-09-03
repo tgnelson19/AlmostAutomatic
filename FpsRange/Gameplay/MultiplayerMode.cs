@@ -36,6 +36,7 @@ public class MultiplayerMode
     private NetClient _client;
     private int _localId;
     private GraphicsDevice _device;
+    private ClientConnectionState? _lastClientState; // tracks NetClient.State so we notice Failed/Disconnected transitions
 
     private Vector3 _localGroundPos;
     private float _localYaw, _localPitch;
@@ -107,6 +108,7 @@ public class MultiplayerMode
         _pendingLocalRespawn = null;
         StatusText = "";
         HostAddressLabel = "";
+        _lastClientState = null;
     }
 
     /// <summary>
@@ -133,6 +135,24 @@ public class MultiplayerMode
 
         _host?.Poll();
         _client?.Poll();
+
+        // NetClient tracks Connecting/Connected/Failed/Disconnected internally, but nothing was
+        // reading it - a bad IP or an unreachable/firewalled host would leave the UI stuck on
+        // "Connecting..." forever even though NetClient had already given up. Surface the
+        // transition once so a dead connection reads as a failure instead of a hang.
+        if (!IsHost && _client != null && _client.State != _lastClientState)
+        {
+            _lastClientState = _client.State;
+            switch (_client.State)
+            {
+                case ClientConnectionState.Failed:
+                    StatusText = $"Connection failed: {_client.FailReason}";
+                    break;
+                case ClientConnectionState.Disconnected:
+                    StatusText = $"Disconnected from host ({_client.FailReason})";
+                    break;
+            }
+        }
 
         foreach (var rp in _remotePlayers.Values)
             rp.Tick(gameTime);
@@ -511,18 +531,39 @@ public class MultiplayerMode
         rp.DisplayHp = info.Hp;
     }
 
+    /// <summary>
+    /// Picks the address to show as the host's connect string. GetAllNetworkInterfaces() often
+    /// lists virtual adapters (Hyper-V vEthernet, Docker/WSL, VPN) ahead of the real Wi-Fi/Ethernet
+    /// adapter; blindly taking the first "Up" IPv4 address can hand out one of those instead of the
+    /// LAN address the other machine can actually reach, which is exactly what makes a client
+    /// connect attempt just sit there. This machine's real LAN lives on 192.168.1.0/24, so prefer
+    /// an address on that subnet outright, then fall back to the first non-virtual private address.
+    /// </summary>
     private static string GetLanAddress()
     {
+        const string preferredSubnetPrefix = "192.168.1.";
         try
         {
+            string firstFallback = null;
             foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
             {
                 if (ni.OperationalStatus != OperationalStatus.Up) continue;
                 if (ni.NetworkInterfaceType == NetworkInterfaceType.Loopback) continue;
+                if (ni.NetworkInterfaceType == NetworkInterfaceType.Tunnel) continue;
+                if (ni.Description.IndexOf("Virtual", StringComparison.OrdinalIgnoreCase) >= 0) continue;
+                if (ni.Description.IndexOf("Hyper-V", StringComparison.OrdinalIgnoreCase) >= 0) continue;
+                if (ni.Description.IndexOf("VMware", StringComparison.OrdinalIgnoreCase) >= 0) continue;
+                if (ni.Description.IndexOf("VPN", StringComparison.OrdinalIgnoreCase) >= 0) continue;
+
                 foreach (var addr in ni.GetIPProperties().UnicastAddresses)
-                    if (addr.Address.AddressFamily == AddressFamily.InterNetwork)
-                        return addr.Address.ToString();
+                {
+                    if (addr.Address.AddressFamily != AddressFamily.InterNetwork) continue;
+                    string ip = addr.Address.ToString();
+                    if (ip.StartsWith(preferredSubnetPrefix, StringComparison.Ordinal)) return ip;
+                    firstFallback ??= ip;
+                }
             }
+            if (firstFallback != null) return firstFallback;
         }
         catch { /* best-effort - fall through to the loopback fallback below */ }
         return "127.0.0.1";
