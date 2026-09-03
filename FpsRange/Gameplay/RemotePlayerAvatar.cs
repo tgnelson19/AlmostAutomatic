@@ -65,6 +65,7 @@ public class RemotePlayerAvatar
         Avatar.Position = Vector3.Lerp(_prevPos, _targetPos, t);
         Avatar.Yaw = LerpAngle(_prevYaw, _targetYaw, t);
         Avatar.TickMuzzleFlash(gameTime);
+        Avatar.TickAnimation(gameTime);
     }
 
     private static float LerpAngle(float a, float b, float t)

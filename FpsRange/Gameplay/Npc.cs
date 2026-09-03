@@ -34,6 +34,23 @@ public class Npc
     public const float ChaseGiveUpDistance = 2f;
     private const float PatrolRepickTimeout = 8f;
 
+    // Purely cosmetic idle animation - a floppy walk cycle plus a goofy side-to-side body wobble,
+    // both driven off _animTime rather than actual velocity so they never touch Position/Yaw and
+    // can't affect hit detection (GetBodyBounds/GetHeadBounds read Position directly). The two legs
+    // use deliberately mismatched speeds/amplitudes/phases so they never fall into a believable,
+    // synced walk cycle - they're meant to look broken.
+    private static readonly Vector3 ArmSize = new Vector3(0.20f, 0.20f, 0.60f);
+    private static readonly Vector3 LegSize = new Vector3(0.26f, 0.85f, 0.26f);
+    private static readonly Vector3 GunBodySize = new Vector3(0.16f, 0.20f, 0.30f);
+    private static readonly Vector3 GunBarrelSize = new Vector3(0.08f, 0.08f, 0.30f);
+    private const float BodySwaySpeed = 3.4f;
+    private const float BodySwayAmount = 0.10f;
+    private const float BodyTiltAmount = 0.16f;
+    private const float LegSwingSpeedA = 5.1f;
+    private const float LegSwingSpeedB = 3.6f;
+    private const float LegSwingAmplitudeA = 0.6f;
+    private const float LegSwingAmplitudeB = 0.45f;
+
     public Vector3 Position; // feet/ground position (not eye height, unlike PlayerController)
     public float Yaw;
     public int BodyHp = BodyMaxHp;
@@ -48,6 +65,12 @@ public class Npc
     private float _patrolTimer;
 
     private static Mesh _bodyMesh;
+    private static Mesh _armMesh;
+    private static Mesh _legMesh;
+    private static Mesh _gunBodyMesh;
+    private static Mesh _gunBarrelMesh;
+
+    private float _animTime;
 
     // Optional muzzle-flash support, used by multiplayer remote-player avatars (a real NPC never
     // triggers this - only Multiplayer's RemotePlayerAvatar calls TriggerMuzzleFlash). Loaded
@@ -59,6 +82,18 @@ public class Npc
     {
         var (verts, indices) = PrimitiveMeshBuilder.BuildBox(BodySize, new Color(95, 105, 70));
         _bodyMesh = new Mesh(device, verts, indices);
+
+        var (av, ai) = PrimitiveMeshBuilder.BuildBox(ArmSize, new Color(95, 105, 70));
+        _armMesh = new Mesh(device, av, ai);
+
+        var (lv, li) = PrimitiveMeshBuilder.BuildBox(LegSize, new Color(70, 80, 50));
+        _legMesh = new Mesh(device, lv, li);
+
+        var (gbv, gbi) = PrimitiveMeshBuilder.BuildBox(GunBodySize, new Color(50, 50, 55));
+        _gunBodyMesh = new Mesh(device, gbv, gbi);
+
+        var (grv, gri) = PrimitiveMeshBuilder.BuildBox(GunBarrelSize, new Color(30, 30, 33));
+        _gunBarrelMesh = new Mesh(device, grv, gri);
     }
 
     public void LoadMuzzleFlash(GraphicsDevice device)
@@ -75,8 +110,17 @@ public class Npc
         if (_muzzleFlashLoaded) _muzzleFlash.Update(gameTime);
     }
 
+    /// <summary>Advances the cosmetic leg-flop/body-sway clock. Called every frame from both the
+    /// AI Update() below (real NPCs) and RemotePlayerAvatar.Tick() (remote players in multiplayer,
+    /// whose Update() AI method is never invoked) - Draw() has no GameTime of its own to work
+    /// from, so this is how both paths keep the animation moving.</summary>
+    public void TickAnimation(GameTime gameTime)
+    {
+        if (!Alive) return; // freeze the flailing the instant it dies, rather than animating a corpse
+        _animTime += (float)gameTime.ElapsedGameTime.TotalSeconds;
+    }
+
     public Vector3 EyePosition => Position + new Vector3(0, BodySize.Y * 0.85f, 0);
-    private Vector3 HeadCenter => Position + new Vector3(0, BodySize.Y + HeadWorldSize / 2f, 0);
 
     public void Spawn(Vector3 groundPosition)
     {
@@ -194,6 +238,7 @@ public class Npc
         fireOrigin = default;
         fireDir = default;
         hitChance = 0f;
+        TickAnimation(gameTime);
         if (!Alive) return;
 
         float dt = (float)gameTime.ElapsedGameTime.TotalSeconds;
@@ -269,19 +314,74 @@ public class Npc
     {
         if (!Alive) return;
 
-        Matrix bodyWorld = Matrix.CreateRotationY(Yaw) * Matrix.CreateTranslation(Position + new Vector3(0, BodySize.Y / 2f, 0));
+        // "root" folds together the cosmetic wiggle (sway + tilt, entirely draw-only - Position/Yaw
+        // are never touched, so GetBodyBounds/GetHeadBounds and every raycast hit-test stay exact)
+        // with the real facing/position. Every attached part below is built as a translation in the
+        // character's own local space (X = right, Y = up, -Z = forward, matching the rest of this
+        // file's forward/right convention) multiplied by "root" last, so it inherits both the wiggle
+        // and the actual Yaw for free - this is also what makes the arms/gun/legs automatically face
+        // wherever the body is facing, with no separate aiming logic needed.
+        float sway = MathF.Sin(_animTime * BodySwaySpeed) * BodySwayAmount;
+        float tilt = MathF.Sin(_animTime * BodySwaySpeed + MathHelper.PiOver2) * BodyTiltAmount;
+        Matrix wiggle = Matrix.CreateTranslation(sway, 0, 0) * Matrix.CreateRotationZ(tilt);
+        Matrix root = wiggle * Matrix.CreateRotationY(Yaw) * Matrix.CreateTranslation(Position);
+
+        Matrix bodyWorld = Matrix.CreateTranslation(0, BodySize.Y / 2f, 0) * root;
         _bodyMesh.Draw(device, bodyWorld, view, proj);
 
-        DrawHead(device, view, proj);
+        DrawHead(device, root, view, proj);
+        DrawLimbs(device, root, view, proj, out Matrix muzzleWorld);
 
         if (_muzzleFlashLoaded)
-        {
-            Vector3 forward = new Vector3(MathF.Sin(Yaw), 0, -MathF.Cos(Yaw));
-            Vector3 right = new Vector3(-forward.Z, 0, forward.X);
-            Vector3 muzzlePos = Position + forward * 0.6f + right * 0.3f + new Vector3(0, BodySize.Y * 0.55f, 0);
-            Matrix muzzleWorld = Matrix.CreateRotationY(Yaw) * Matrix.CreateTranslation(muzzlePos);
             _muzzleFlash.Draw(device, muzzleWorld, view, proj);
-        }
+    }
+
+    /// <summary>
+    /// Two arms + a boxy gun (always held facing local -Z / straight ahead, so they read as aiming
+    /// wherever the body is facing) plus two independently-swinging legs. The legs deliberately use
+    /// mismatched speeds/phases (LegSwingSpeedA/B) so they never settle into a believable walk cycle
+    /// - they're meant to flop around looking broken, per the goofy-animation request.
+    /// </summary>
+    private void DrawLimbs(GraphicsDevice device, Matrix root, Matrix view, Matrix proj, out Matrix muzzleWorld)
+    {
+        float hipHeight = LegSize.Y; // legs reach exactly to the ground at rest (swing = 0)
+        float legHalfHeight = LegSize.Y / 2f;
+        float legSideOffset = BodySize.X * 0.28f;
+
+        DrawLeg(device, root, view, proj, -legSideOffset, hipHeight, legHalfHeight,
+            MathF.Sin(_animTime * LegSwingSpeedA) * LegSwingAmplitudeA);
+        DrawLeg(device, root, view, proj, legSideOffset, hipHeight, legHalfHeight,
+            MathF.Sin(_animTime * LegSwingSpeedB + 1.7f) * LegSwingAmplitudeB);
+
+        float shoulderHeight = BodySize.Y * 0.74f;
+        float armSideOffset = BodySize.X * 0.5f + ArmSize.X * 0.5f;
+        float armForward = ArmSize.Z * 0.5f + 0.05f;
+
+        Matrix leftArmLocal = Matrix.CreateTranslation(-armSideOffset, shoulderHeight, -armForward);
+        _armMesh.Draw(device, leftArmLocal * root, view, proj);
+
+        Matrix rightArmLocal = Matrix.CreateTranslation(armSideOffset, shoulderHeight, -armForward);
+        _armMesh.Draw(device, rightArmLocal * root, view, proj);
+
+        float gunForward = ArmSize.Z + GunBodySize.Z * 0.4f;
+        Matrix gunBodyLocal = Matrix.CreateTranslation(armSideOffset, shoulderHeight, -gunForward);
+        _gunBodyMesh.Draw(device, gunBodyLocal * root, view, proj);
+
+        float barrelForward = gunForward + GunBodySize.Z * 0.5f + GunBarrelSize.Z * 0.5f;
+        Matrix gunBarrelLocal = Matrix.CreateTranslation(armSideOffset, shoulderHeight, -barrelForward);
+        _gunBarrelMesh.Draw(device, gunBarrelLocal * root, view, proj);
+
+        float muzzleForward = barrelForward + GunBarrelSize.Z * 0.5f;
+        muzzleWorld = Matrix.CreateTranslation(armSideOffset, shoulderHeight, -muzzleForward) * root;
+    }
+
+    /// <summary>Draws one leg swinging about a pivot fixed at its hip (top), rather than its
+    /// center, so it reads as kicking from the hip instead of just spinning in place.</summary>
+    private void DrawLeg(GraphicsDevice device, Matrix root, Matrix view, Matrix proj, float sideOffset, float hipHeight, float legHalfHeight, float swingAngle)
+    {
+        Matrix hipPivot = Matrix.CreateTranslation(0, legHalfHeight, 0) * Matrix.CreateRotationX(swingAngle) * Matrix.CreateTranslation(0, -legHalfHeight, 0);
+        Matrix hip = Matrix.CreateTranslation(sideOffset, hipHeight, 0);
+        _legMesh.Draw(device, hipPivot * hip * root, view, proj);
     }
 
     /// <summary>
@@ -290,9 +390,9 @@ public class Npc
     /// (GetHeadBounds/TakeHeadHit) is binary, unlike Target's scored rings - the rings here are
     /// purely decorative.
     /// </summary>
-    private void DrawHead(GraphicsDevice device, Matrix view, Matrix proj)
+    private void DrawHead(GraphicsDevice device, Matrix root, Matrix view, Matrix proj)
     {
-        Matrix baseWorld = Matrix.CreateScale(HeadScale) * Matrix.CreateRotationY(Yaw) * Matrix.CreateTranslation(HeadCenter);
+        Matrix baseWorld = Matrix.CreateScale(HeadScale) * Matrix.CreateTranslation(0, BodySize.Y + HeadWorldSize / 2f, 0) * root;
         Target.SharedCubeMesh.Draw(device, baseWorld, view, proj);
 
         const float epsilon = 0.006f;

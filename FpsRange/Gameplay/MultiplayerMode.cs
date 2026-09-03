@@ -46,7 +46,16 @@ public class MultiplayerMode
     private const float RespawnDelay = 2f;
     private const float RespawnMinDistance = 12f;
 
+    // PvP damage is fully deterministic - a raycast box test (see ResolveShot/TestCandidate)
+    // decides whether a shot landed and where, with no random hit-chance roll anywhere in this
+    // path (that RNG only exists for NPC-vs-player fire in NpcBattleMode, which multiplayer
+    // doesn't use at all). Headshots always deal exactly MaxHp (see PlayerHealth.TakeHeadshot) -
+    // i.e. lethal regardless of current HP, same as "100 HP worth of damage" when MaxHp is 100.
+    public const float BodyShotDamage = 25f;
+
     private Vector3? _pendingLocalRespawn;
+    private bool _localDead;
+    public bool IsLocalPlayerDead => _localDead;
 
     public void Load(GraphicsDevice device, SpriteFont font)
     {
@@ -54,6 +63,17 @@ public class MultiplayerMode
         Map.Load(device);
         Npc.LoadShared(device); // safe to call again even if NpcBattleMode already loaded it
         _hud.Load(device, font);
+
+        // Fires for both paths that can zero out the local player's HP: the host applying damage
+        // to itself directly (TakeHit/TakeHeadshot in ApplyDamage) and a client reconciling the
+        // host's authoritative HitEvent (SetHp in ClientOnHitEvent). Previously nothing looked at
+        // LocalHealth.Hp reaching 0 at all, so hitting 0 had no visible effect - the player just
+        // kept moving/shooting until the respawn timer silently teleported them away.
+        LocalHealth.OnDied += () =>
+        {
+            _localDead = true;
+            StatusText = "You died - respawning...";
+        };
     }
 
     public void ResetRun() => LocalHealth.Reset();
@@ -106,6 +126,7 @@ public class MultiplayerMode
         _serverHealth.Clear();
         _pendingRespawnTimers.Clear();
         _pendingLocalRespawn = null;
+        _localDead = false;
         StatusText = "";
         HostAddressLabel = "";
         _lastClientState = null;
@@ -162,6 +183,8 @@ public class MultiplayerMode
             player.Teleport(_pendingLocalRespawn.Value);
             LocalHealth.Reset();
             _pendingLocalRespawn = null;
+            _localDead = false;
+            StatusText = "";
         }
 
         if (IsHost)
@@ -187,7 +210,7 @@ public class MultiplayerMode
                 player.Camera.Yaw, player.Camera.Pitch));
         }
 
-        if (fireRay.HasValue)
+        if (fireRay.HasValue && !_localDead)
         {
             if (IsHost)
             {
@@ -258,7 +281,7 @@ public class MultiplayerMode
         PlayerHealth health = victimId == NetProtocol.HostPlayerId ? LocalHealth : GetOrCreateServerHealth(victimId);
 
         if (isHead) health.TakeHeadshot();
-        else health.TakeHit();
+        else health.TakeHit(BodyShotDamage);
 
         _host.SendReliableToAll(NetProtocol.WriteHitEvent(victimId, health.Hp));
         if (victimId != NetProtocol.HostPlayerId && _remotePlayers.TryGetValue(victimId, out var rp))
@@ -286,6 +309,8 @@ public class MultiplayerMode
             {
                 player.Teleport(spawnGround);
                 LocalHealth.Reset();
+                _localDead = false;
+                StatusText = "";
             }
             else
             {

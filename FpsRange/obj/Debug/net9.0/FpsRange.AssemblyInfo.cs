@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("FpsRange")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+71b1561d9c4f20198afb539242204d88978b538c")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+b90cc790cab5a36a056a43269f40ba46f9465c16")]
 [assembly: System.Reflection.AssemblyProductAttribute("FpsRange")]
 [assembly: System.Reflection.AssemblyTitleAttribute("FpsRange")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

@@ -4,7 +4,7 @@
   <Platform>DesktopGL</Platform>
   <Config />
   <SourceFiles>
-    <File>C:/Users/Tyler/source/AlmostAutomatic/FpsRange/Content/HudFont.spritefont</File>
+    <File>C:/Users/Tyler/source/AlmostAutomatic/fpsrange/Content/HudFont.spritefont</File>
   </SourceFiles>
   <DestFiles>
     <File xsi:nil="true" />

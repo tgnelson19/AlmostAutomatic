@@ -232,12 +232,16 @@ public class Game1 : Game
             return;
         }
 
-        _player.Update(gameTime, _input);
+        // While dead in multiplayer (HP at 0, waiting on the respawn timer) the player is frozen in
+        // place instead of being able to keep walking/looking/shooting around as a "ghost" - see
+        // MultiplayerMode.IsLocalPlayerDead.
+        bool multiplayerDead = _appState == AppState.Multiplayer && _multiplayer.IsLocalPlayerDead;
+        if (!multiplayerDead) _player.Update(gameTime, _input);
 
-        bool isMoving = new Vector2(_player.Velocity.X, _player.Velocity.Z).LengthSquared() > 0.01f;
+        bool isMoving = !multiplayerDead && new Vector2(_player.Velocity.X, _player.Velocity.Z).LengthSquared() > 0.01f;
         _viewModel.Update(gameTime, isMoving);
 
-        bool fired = _weapon.TryFire(gameTime, _input, _camera, _viewModel, out Ray fireRay);
+        bool fired = _weapon.TryFire(gameTime, _input, _camera, _viewModel, out Ray fireRay) && !multiplayerDead;
 
         if (_appState == AppState.AimTesting)
             _aimTesting.Update(gameTime, _player.Camera.Position, fired ? fireRay : null, _totalTime);
